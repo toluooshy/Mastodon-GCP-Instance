@@ -118,7 +118,7 @@ Before doing anything Mastodon related, we need to first set up the infastructur
 
 You've now created a new project in Google Cloud Platform with all the appropriate scaffolding. This will serve as the home for all of our cloud functionality. For the sake of consistency, the naming conventions in this tutorial will all be based on the names of the Mastodon instance we are builing, and the GCP project that it belongs to. In this case those are `mastodongcp.social` and `mastodon-tutorial` respectively.
 
-Addtionally you will need to purchase a domain name. This can be done by using most domain service providers like GoDaddy, Porkbun, or Namecheap. For the sake of this tutorial we used Porkbun. In this tutorial the domain used was `mastodongcp.social`.
+Addtionally you will need to purchase a domain name. This can be done by using most domain service providers like GoDaddy, Porkbun, Namecheap, etc. For the sake of this tutorial we used Porkbun. In this tutorial the domain used was `mastodongcp.social`. Once you have your domain name make sure to go to respective API key management page and generate a new key. MAKE SURE TO SAVE THE KEY AND SECRET SOMEWHERE SAFE. We will be using these later.
 
 ### Reserving IP Addresses
 
@@ -132,7 +132,7 @@ For the internal IP addresses, within the same "IP addresses" section, click on 
 INTERNAL ADDRESS 1
 
 Name: mastodon-web
-Description: <empty>
+Description: <LEAVE THIS EMPTY>
 IP version: IPv4
 Network: default
 Subnetwork: us-central1
@@ -145,7 +145,7 @@ Purpose: Non-shared
 INTERNAL ADDRESS 2
 
 Name: mastodon-streaming
-Description: <empty>
+Description: <LEAVE THIS EMPTY>
 IP version: IPv4
 Network: default
 Subnetwork: us-central1
@@ -436,6 +436,162 @@ At this point the terminal will output the Mastodon instance variables. THESE AR
 
 The environment variables that we got from the setup wizard will be used across the instances that we will make later in this tutorial so keep them around.
 
+## The One-Off VMs
+
+Before we continuing we will need to set up a few one-off VMs that will foster scalability for finalized Mastodon instance. These VMs will be for our PgBouncer, Elasticsearch, and Certbot functionalities.
+
+### PgBouncer VM
+
+PgBouncer is a lightweight connection pooler for PostgreSQL databases, designed to improve database performance and scalability by efficiently managing database connections. It acts as an intermediary layer between client applications and PostgreSQL, allowing a limited number of connections to be shared among a larger number of clients. PgBouncer helps prevent connection overflow, optimizes resource utilization, and enhances the overall responsiveness of PostgreSQL database systems.
+
+Below is how we will create our PgBouncer VM:
+
+1. **Navigate to Compute Engine:**
+
+   - In the Cloud Console, locate and click on the "Navigation menu" (three horizontal lines) in the upper left corner.
+   - Select "Compute Engine".
+
+2. **Create a New VM Instance:**
+
+   - Click the "CREATE INSTANCE" button to create a new VM instance.
+   - Enter the following details in the "Create an instance" page:
+     - **Name:** `mastodongcp-social-pgbouncer`
+     - **Region and Zone:** `us-central1` and `us-central1-a`.
+     - **Machine configuration:** Select E2 and `e2-micro (2 vCPU, 1 core, 1 GB memory)`
+     - **Availability policies:** Select "Standard" for the VM provisioning model.
+     - **Container:** Click the "DEPLOY CONTAINER" button, when the modal pops up:
+       - Set the Container image to `docker.io/bitnami/pgbouncer:latest`.
+       - Set Restart policy to "Never".
+       - Select "Run as privileged".
+       - Environment variables
+         - POSTGRESQL_HOST: `<Your mastodon-db SQL instance Private IP address>`
+         - POSTGRESQL_USERNAME: `mastodon`
+         - POSTGRESQL_DATABASE: `mastodon`
+         - POSTGRESQL_PASSWORD: `<Your password for the mastodon user within the mastodon-db SQL instance>`
+         - PGBOUNCER_POOL_MODE: `transaction`
+         - PGBOUNCER_MAX_CLIENT_CONN: `150`
+         - PGBOUNCER_DEFAULT_POOL_SIZE: `40`
+         - PGBOUNCER_DATABASE: `mastodon`
+     - **Boot Disk:** Click "CHANGE", then set the Operating system to `Container Optimized OS` and the Version to the latest LTS release of `Container-Optimized OS`. Once done click the blue "SELECT" button.
+     - **Identity and API access:** For Access scopes select "Allow default access". Keep all the other settings as is.
+
+3. **Create the Instance:**
+   - Click the blue "CREATE" button to create the staging VM. This process may take a few minutes.
+
+Now that we have our machine, it should automatically run based on the provisioned PgBouncer container and the preset environment variables.
+
+### Elasticsearch VM
+
+Elasticsearch is an open-source, distributed search and analytics engine designed for horizontal scalability and real-time data exploration. It is built on top of the Apache Lucene search library and provides a RESTful interface for indexing, searching, and analyzing large volumes of structured and unstructured data. Elasticsearch is commonly used for log and event data analysis, full-text search, and business intelligence applications.
+
+Below is how we will create our Elasticsearch VM:
+
+1. **Navigate to Compute Engine:**
+
+   - We should already be here based on the previous work done towards creating the Elasticsearch VM.
+
+2. **Create a New VM Instance:**
+
+   - Click the "CREATE INSTANCE" button to create a new VM instance.
+   - Enter the following details in the "Create an instance" page:
+
+     - **Name:** `mastodongcp-social-es`
+     - **Region and Zone:** `us-central1` and `us-central1-a`.
+     - **Machine configuration:** Select E2 and `e2-small (2 vCPU, 1 core, 1 GB memory)`
+     - **Availability policies:** Select "Standard" for the VM provisioning model.
+     - **Container:** Click the "DEPLOY CONTAINER" button, when the modal pops up:
+       - Set the Container image to `docker.io/bitnami/elasticsearch:latest`.
+       - Set Restart policy to "Never".
+       - Select "Run as privileged".
+       - Environment variables
+         - ELASTICSEARCH_CLUSTER_NAME: `mastodongcp-social`
+         - ELASTICSEARCH_HEAP_SIZE: `768m`
+     - **Boot Disk:** Click "CHANGE", then set the Operating system to `Container Optimized OS` and the Version to the latest LTS release of `Container-Optimized OS`. Once done click the blue "SELECT" button.
+     - **Identity and API access:** For Access scopes select "Allow default access". Keep all the other settings as is.
+     - **Advanced options:**
+
+       - Management:
+
+         - Under Metadata click on the "ADD ITEM" button.
+         - Set the key to `user-data` and set the Value 1 to the following:
+
+           ```
+           #cloud-config
+
+           bootcmd:
+           - fsck.ext4 -tvy /dev/sdb
+           - mkdir -p /mnt/disks/elasticsearch-data-persistence
+           - mount -o discard,defaults /dev/sdb /mnt/disks/elasticsearch-data-persistence
+           - chown 1001:1001 /mnt/disks/elasticsearch-data-persistence
+           - sysctl -w vm.max_map_count=262144
+           ```
+
+3. **Create the Instance:**
+   - Click the blue "CREATE" button to create the staging VM. This process may take a few minutes.
+
+Now that we have our machine, it should automatically run based on the provisioned Elasticsearch container and the preset environment variables.
+
+### Certbot VM
+
+Certbot is a free, open-source tool for automatically managing SSL/TLS certificates, primarily used to enable secure HTTPS connections for web servers. Developed by the Electronic Frontier Foundation (EFF), Certbot simplifies the process of obtaining, renewing, and configuring SSL certificates from the Let's Encrypt certificate authority. It supports various web servers and provides a command-line interface for straightforward certificate management.
+
+Below is how we will create our Certbot VM:
+
+1. **Navigate to Compute Engine:**
+
+   - We should already be here based on the previous work done towards creating the Certbot VM.
+
+2. **Create a New VM Instance:**
+
+   - Click the "CREATE INSTANCE" button to create a new VM instance.
+   - Enter the following details in the "Create an instance" page:
+
+     - **Name:** `mastodongcp-social-certbot`
+     - **Region and Zone:** `us-central1` and `us-central1-a`.
+     - **Machine configuration:** Select E2 and `e2-micro (2 vCPU, 1 core, 1 GB memory)`
+     - **Availability policies:** Select "Standard" for the VM provisioning model.
+     - **Boot Disk:** Click "CHANGE", then set the Operating system to `Container Optimized OS` and the Version to the latest LTS release of `Container-Optimized OS`. Once done click the blue "SELECT" button.
+     - **Identity and API access:** For Access scopes select "Allow default access". Keep all the other settings as is.
+     - **Advanced options:**
+
+       - Management:
+
+         - Under Metadata click on the "ADD ITEM" button.
+         - Set the key to `user-data` and set the Value 1 to the following. KEEP IN MIND THAT THESE ARE THE COMMANDS FOR IF YOUR DNS USED . If you did not use Porkbun, you can find the respective certbot letsencrypt commands for your domain service provider at [this](https://eff-certbot.readthedocs.io/en/stable/using.html#third-party-plugins) link. Otherwise use the following:
+
+           ```
+           #cloud-config
+
+           runcmd:
+           - /usr/bin/docker pull gcr.io/google.com/cloudsdktool/google-cloud-cli:alpine
+           - /usr/bin/docker pull certbot/certbot
+           - /usr/bin/docker pull infinityofspace/certbot_dns_porkbun
+           - docker run --rm --volume /var/lib/letsencrypt:/etc/letsencrypt --volume /var/log/letsencrypt:/var/log/letsencrypt infinityofspace/certbot_dns_porkbun:latest certonly --non-interactive --agree-tos --register-unsafely-without-email --preferred-challenges dns --authenticator dns-porkbun --dns-porkbun-key <YOUR DNS API KEY> --dns-porkbun-secret <YOUR DNS API SECRET> --dns-porkbun-propagation-seconds 60 -d "mastodongcp.social" --max-log-backups 0
+           - /usr/bin/docker run --rm --volume /var/lib/letsencrypt/:/var/lib/letsencrypt/ gcr.io/google.com/cloudsdktool/google-cloud-cli:alpine gcloud storage cp --recursive /var/lib/letsencrypt/live/* gs://mastodongcp-social-config/letsencrypt
+           ```
+
+3. **Create the Instance:**
+
+   - Click the blue "CREATE" button to create the staging VM. This process may take a few minutes.
+
+4. **Create an Instance Schedule for the new VM:**
+
+   - Since we want to recertify our SSL certificate periodically, we will need to create an automated on/off switch. To do this we will make a minor detour to create an Instance Schedule which will automate the process of turning on and off its respective VM. To do this click on the "INSTANCE SCHEDULES" tab.
+   - Once you are on the "Instance schedules" page, click on the ttext in blue that reads "CREATE SCHEDULE" hit the blue "SUBMIT" button after filling out the popup with the following attributes:
+
+     ```
+     Name: mastodongcp-social-cron
+     Region: us-central1
+     Start time: 3:00 AM
+     Stop time: 3:30 AM
+     Time zone: <Your preferred time zone>
+     Frequency: Repeat daily
+     ```
+
+   - With the instance scheduler now created, click on it and then click on the "ADD INSTANCES TO SCHEDULE" button. Click on the certbot instance to add it.
+
+Now that we have our machine, it should automatically run based on the instance scheduler and the preset environment variables.
+
 ## Nginx VM
 
 Nginx is an open-source web server known for its high performance and efficient handling of concurrent connections. It serves static content with low resource utilization and excels as a reverse proxy and load balancer. With its event-driven architecture, Nginx is widely used to improve web server performance, scalability, and reliability in various hosting environments. For the sake of this project it will serve as the central nexus of our Mastodon instance.
@@ -710,7 +866,7 @@ An Instance Group is a managed and scalable set of VM instances that are created
    - Click the "CREATE INSTANCE TEMPLATE" button to create a new VM instance.
    - Enter the following details in the "Create Instance Group" page, then hit the blue "CREATE" button:
      ```
-     Name: mastodongcp-social-nginx-load-balancer
+     Name: mastodongcp-social-nginx-mig
      Instance template: mastodongcp-social-nginx-spot
      Location: Multiple zones
      Region: us-central1
@@ -726,102 +882,452 @@ An Instance Group is a managed and scalable set of VM instances that are created
          Hit SAVE
      ```
 
-## The One-Off VMs
-
-Now that we're familiar with the workflow of creating instance groups to automate the generation of VMs using instance templates, we will do a similar thing for our web, streaming, sidekiq, and sidekiq scheduler VMs. Before we do that though we will need to set up a few one-off VMs that will foster scalability for finalized Mastodon instance. These VMs will be for our PgBouncer, Elasticsearch, and Certbot functionalities.
-
-### PgBouncer VM
-
-PgBouncer is a lightweight connection pooler for PostgreSQL databases, designed to improve database performance and scalability by efficiently managing database connections. It acts as an intermediary layer between client applications and PostgreSQL, allowing a limited number of connections to be shared among a larger number of clients. PgBouncer helps prevent connection overflow, optimizes resource utilization, and enhances the overall responsiveness of PostgreSQL database systems.
-
-Below is how we will create our PgBouncer VM:
-
-1. **Navigate to Compute Engine:**
-
-   - In the Cloud Console, locate and click on the "Navigation menu" (three horizontal lines) in the upper left corner.
-   - Select "Compute Engine".
-
-2. **Create a New VM Instance:**
-
-   - Click the "CREATE INSTANCE" button to create a new VM instance.
-   - Enter the following details in the "Create an instance" page:
-     - **Name:** `mastodongcp-social-pgbouncer`
-     - **Region and Zone:** `us-central1` and `us-central1-a`.
-     - **Machine configuration:** Select E2 and `e2-micro (2 vCPU, 1 core, 1 GB memory)`
-     - **Availability policies:** Select "Standard" for the VM provisioning model.
-     - **Container:** Click the "DEPLOY CONTAINER" button, when the modal pops up:
-       - Set the Container image to `docker.io/bitnami/pgbouncer:latest`.
-       - Set Restart policy to "Never".
-       - Select "Run as privileged".
-       - Environment variables
-         - POSTGRESQL_HOST: `<Your mastodon-db SQL instance Private IP address>`
-         - POSTGRESQL_USERNAME: `mastodon`
-         - POSTGRESQL_DATABASE: `mastodon`
-         - POSTGRESQL_PASSWORD: `<Your password for the mastodon user within the mastodon-db SQL instance>`
-         - PGBOUNCER_POOL_MODE: `transaction`
-         - PGBOUNCER_MAX_CLIENT_CONN: `150`
-         - PGBOUNCER_DEFAULT_POOL_SIZE: `40`
-         - PGBOUNCER_DATABASE: `mastodon`
-     - **Boot Disk:** Click "CHANGE", then set the Operating system to `Container Optimized OS` and the Version to the latest LTS release of `Container-Optimized OS`. Once done click the blue "SELECT" button.
-     - **Identity and API access:** For Access scopes select "Allow default access". Keep all the other settings as is.
-
-3. **Create the Instance:**
-   - Click the blue "CREATE" button to create the staging VM. This process may take a few minutes.
-
-Now that we have our machine, it should automatically run based on the provisioned PgBouncer container and the preset environment variables.
-
-### Elasticsearch VM
-
-Elasticsearch is an open-source, distributed search and analytics engine designed for horizontal scalability and real-time data exploration. It is built on top of the Apache Lucene search library and provides a RESTful interface for indexing, searching, and analyzing large volumes of structured and unstructured data. Elasticsearch is commonly used for log and event data analysis, full-text search, and business intelligence applications.
-
-Below is how we will create our Elasticsearch VM:
-
-1. **Navigate to Compute Engine:**
-
-   - We should already be her based on the previous work done towards creating the PgBouncer VM.
-
-2. **Create a New VM Instance:**
-
-   - Click the "CREATE INSTANCE" button to create a new VM instance.
-   - Enter the following details in the "Create an instance" page:
-
-     - **Name:** `mastodongcp-social-es`
-     - **Region and Zone:** `us-central1` and `us-central1-a`.
-     - **Machine configuration:** Select E2 and `e2-small (2 vCPU, 1 core, 1 GB memory)`
-     - **Availability policies:** Select "Standard" for the VM provisioning model.
-     - **Container:** Click the "DEPLOY CONTAINER" button, when the modal pops up:
-       - Set the Container image to `docker.io/bitnami/elasticsearch:latest`.
-       - Set Restart policy to "Never".
-       - Select "Run as privileged".
-       - Environment variables
-         - ELASTICSEARCH_CLUSTER_NAME: `mastodongcp-social`
-         - ELASTICSEARCH_HEAP_SIZE: `768m`
-     - **Boot Disk:** Click "CHANGE", then set the Operating system to `Container Optimized OS` and the Version to the latest LTS release of `Container-Optimized OS`. Once done click the blue "SELECT" button.
-     - **Identity and API access:** For Access scopes select "Allow default access". Keep all the other settings as is.
-     - **Advanced options:**
-
-       - Management:
-
-         - Under Metadata click on the "ADD ITEM" button.
-         - Set the key to `user-data` and set the Value 1 to `#cloud-config`
-
-3. **Create the Instance:**
-   - Click the blue "CREATE" button to create the staging VM. This process may take a few minutes.
-
-Now that we have our machine, it should automatically run based on the provisioned Elasticsearch container and the preset environment variables.
-
-### Certbot VM
-
-Certbot is a free, open-source tool for automatically managing SSL/TLS certificates, primarily used to enable secure HTTPS connections for web servers. Developed by the Electronic Frontier Foundation (EFF), Certbot simplifies the process of obtaining, renewing, and configuring SSL certificates from the Let's Encrypt certificate authority. It supports various web servers and provides a command-line interface for straightforward certificate management.
-
 ## Setting up the Web, Streaming, Sidekiq, and Sidekiq Scheduler VMs
+
+Now that we're familiar with the workflow of creating instance groups to automate the generation of VMs using instance templates, we will do a similar thing for our web, streaming, sidekiq, and sidekiq scheduler VMs.
 
 ### Creating the Instance Templates
 
+This process is almost identical what we dis for our Nginx VM, but there will be slight differences for each of the instance templates we are making here. These are all of the respective differences for the web, streaming, sidekiq, and sidekiq scheduler VMs vis a vis the nginx VM:
+
+#### _web_
+
+- **Name:** `mastodongcp-social-web-spot`
+- **Location:** Select "Regional" and then set the Region to `us-central1`.
+- **Machine configuration:** Select T2D and `t2d-standard-1 (1 vCPU, 4 GB memory)`
+- **Availability policies:** Select "Spot" for the VM provisioning model.
+- **Container:** Click the "DEPLOY CONTAINER" button, when the modal pops up:
+- Set the Container image to `docker.io/tootsuite/mastodon:v4.2.3`.
+- Set Restart policy to "Never".
+- Select "Run as privileged".
+
+- Arguments
+
+  - Argument 1 = `bundle`
+  - Argument 2 = `exec`
+  - Argument 3 = `puma`
+  - Argument 4 = `-C`
+  - Argument 5 = `config/puma.rb`
+
+- Environment variables
+
+  - LOCAL_DOMAIN = `mastodongcp.social`
+  - SINGLE_USER_MODE = `false`
+  - SECRET_KEY_BASE = `<Your setup wizard SECRET_KEY_BASE>`
+  - OTP_SECRET = `<Your setup wizard OTP_SECRET>`
+  - VAPID_PRIVATE_KEY = `<Your setup wizard VAPID_PRIVATE_KEY>`
+  - VAPID_PUBLIC_KEY = `<Your setup wizard VAPID_PUBLIC_KEY>`
+  - DB_HOST = `mastodongcp-social-pgbouncer.us-central1-a.c.mastodon-tutorial.internal` (Use this format but replace the VM name, project name, and region as appropriate)
+  - DB_PORT = `6432`
+  - DB_NAME = `mastodon`
+  - DB_USER = `mastodon`
+  - DB_PASS = `<Your password for the mastodon user within the mastodon-db SQL instance>`
+  - REDIS_HOST = `<Your mastodongcp-social-redis Redis instance Primary Endpoint>`
+  - REDIS_PORT = `6379`
+  - REDIS_PASSWORD = `<LEAVE THIS EMPTY>`
+  - S3_ENABLED = `true`
+  - S3_PROTOCOL = `https`
+  - S3_HOSTNAME = `storage.googleapis.com`
+  - S3_ENDPOINT = `https://storage.googleapis.com`
+  - S3_MULTIPART_THRESHOLD = `52428800`
+  - S3_BUCKET = `mastodongcp-social-storage`
+  - S3_REGION = `us-central1`
+  - AWS_ACCESS_KEY_ID = `<Your generated Google Cloud Storage HMAC Access Key from earlier>`
+  - AWS_SECRET_ACCESS_KEY = `<Your generated Google Cloud Storage HMAC Secret from earlier>`
+  - SMTP_SERVER = `smtp.mailgun.org`
+  - SMTP_PORT = `2525`
+  - SMTP_LOGIN = `<Your Mailgun SMTP username from before, like of the email format @mastodongcp.social>`
+  - SMTP_PASSWORD = `<Your Mailgun SMTP password>`
+  - SMTP_AUTH_METHOD = `plain`
+  - SMTP_OPENSSL_VERIFY_MODE = `none`
+  - SMTP_ENABLE_STARTTLS = `auto`
+  - SMTP_FROM_ADDRESS = `Mastodon <notifications@mastodongcp.social>`
+  - RAILS_LOG_LEVEL = `warn`
+  - PREPARED_STATEMENTS = `false`
+  - ES_ENABLED = `true`
+  - ES_HOST = `mastodongcp-social-es.us-central1-a.c.mastodon-tutorial.internal` (Use this format but replace the VM name, project name, and region as appropriate)
+  - ES_PORT = `9200`
+  - PORT = `3000`
+  - LD_PRELOAD = `libjemalloc.so.2`
+  - WEB_CONCURRENCY = `0`
+  - MAX_THREADS = `40`
+
+- **Boot Disk:** Click "CHANGE", then set the Operating system to `Container Optimized OS` and the Version to the latest LTS release of `Container-Optimized OS`. Once done click the blue "SELECT" button.
+- **Identity and API access:** For Access scopes select "Allow default access". Keep all the other settings as is.
+- **Advanced options:**
+
+- Management:
+
+- Under Metadata click on the "ADD ITEM" button.
+- Set the key to `google-logging-enabled` and set the Value 1 to `true`.
+
+#### _streaming_
+
+- **Name:** `mastodongcp-social-streaming-spot`
+- **Location:** Select "Regional" and then set the Region to `us-central1`.
+- **Machine configuration:** Select E2 and `e2-micro (2 vCPU, 1 core, 1 GB memory)`
+- **Availability policies:** Select "Spot" for the VM provisioning model.
+- **Container:** Click the "DEPLOY CONTAINER" button, when the modal pops up:
+- Set the Container image to `docker.io/tootsuite/mastodon:v4.2.3`.
+- Set Restart policy to "Never".
+- Select "Run as privileged".
+
+- Arguments
+
+  - Argument 1 = `/usr/local/bin/node`
+  - Argument 2 = `./streaming`
+
+- Environment variables
+
+  - LOCAL_DOMAIN = `mastodongcp.social`
+  - SINGLE_USER_MODE = `false`
+  - SECRET_KEY_BASE = `<Your setup wizard SECRET_KEY_BASE>`
+  - OTP_SECRET = `<Your setup wizard OTP_SECRET>`
+  - VAPID_PRIVATE_KEY = `<Your setup wizard VAPID_PRIVATE_KEY>`
+  - VAPID_PUBLIC_KEY = `<Your setup wizard VAPID_PUBLIC_KEY>`
+  - DB_HOST = `mastodongcp-social-pgbouncer.us-central1-a.c.mastodon-tutorial.internal` (Use this format but replace the VM name, project name, and region as appropriate)
+  - DB_PORT = `6432`
+  - DB_NAME = `mastodon`
+  - DB_USER = `mastodon`
+  - DB_PASS = `<Your password for the mastodon user within the mastodon-db SQL instance>`
+  - REDIS_HOST = `<Your mastodongcp-social-redis Redis instance Primary Endpoint>`
+  - REDIS_PORT = `6379`
+  - REDIS_PASSWORD = `<LEAVE THIS EMPTY>`
+  - S3_ENABLED = `true`
+  - S3_PROTOCOL = `https`
+  - S3_HOSTNAME = `storage.googleapis.com`
+  - S3_ENDPOINT = `https://storage.googleapis.com`
+  - S3_MULTIPART_THRESHOLD = `52428800`
+  - S3_BUCKET = `mastodongcp-social-storage`
+  - S3_REGION = `us-central1`
+  - AWS_ACCESS_KEY_ID = `<Your generated Google Cloud Storage HMAC Access Key from earlier>`
+  - AWS_SECRET_ACCESS_KEY = `<Your generated Google Cloud Storage HMAC Secret from earlier>`
+  - SMTP_SERVER = `smtp.mailgun.org`
+  - SMTP_PORT = `2525`
+  - SMTP_LOGIN = `<Your Mailgun SMTP username from before, like of the email format @mastodongcp.social>`
+  - SMTP_PASSWORD = `<Your Mailgun SMTP password>`
+  - SMTP_AUTH_METHOD = `plain`
+  - SMTP_OPENSSL_VERIFY_MODE = `none`
+  - SMTP_ENABLE_STARTTLS = `auto`
+  - SMTP_FROM_ADDRESS = `Mastodon <notifications@mastodongcp.social>`
+  - RAILS_LOG_LEVEL = `warn`
+  - PREPARED_STATEMENTS = `false`
+  - ES_ENABLED = `true`
+  - ES_HOST = `mastodongcp-social-es.us-central1-a.c.mastodon-tutorial.internal` (Use this format but replace the VM name, project name, and region as appropriate)
+  - ES_PORT = `9200`
+  - LD_PRELOAD = `libjemalloc.so.2`
+  - PORT = `4000`
+
+- **Boot Disk:** Click "CHANGE", then set the Operating system to `Container Optimized OS` and the Version to the latest LTS release of `Container-Optimized OS`. Once done click the blue "SELECT" button.
+- **Identity and API access:** For Access scopes select "Allow default access". Keep all the other settings as is.
+- **Advanced options:**
+
+- Management:
+
+- Under Metadata click on the "ADD ITEM" button.
+- Set the key to `google-logging-enabled` and set the Value 1 to `true`.
+
+#### _sidekiq_
+
+- **Name:** `mastodongcp-social-sidekiq-spot`
+- **Location:** Select "Regional" and then set the Region to `us-central1`.
+- **Machine configuration:** Select T2D and `t2d-standard-1 (1 vCPU, 4 GB memory)`
+- **Availability policies:** Select "Spot" for the VM provisioning model.
+- **Container:** Click the "DEPLOY CONTAINER" button, when the modal pops up:
+- Set the Container image to `docker.io/tootsuite/mastodon:v4.2.3`.
+- Set Restart policy to "Never".
+- Select "Run as privileged".
+
+- Arguments
+
+  - Argument 1 = `bundle`
+  - Argument 2 = `exec`
+  - Argument 3 = `sidekiq`
+  - Argument 4 = `-c`
+  - Argument 5 = `20`
+  - Argument 6 = `-q`
+  - Argument 7 = `default,8`
+  - Argument 8 = `-q`
+  - Argument 9 = `push,6`
+  - Argument 10 = `-q`
+  - Argument 11 = `ingress,4`
+  - Argument 12 = `-q`
+  - Argument 13 = `pull,1`
+
+- Environment variables
+
+  - LOCAL_DOMAIN = `mastodongcp.social`
+  - SINGLE_USER_MODE = `false`
+  - SECRET_KEY_BASE = `<Your setup wizard SECRET_KEY_BASE>`
+  - OTP_SECRET = `<Your setup wizard OTP_SECRET>`
+  - VAPID_PRIVATE_KEY = `<Your setup wizard VAPID_PRIVATE_KEY>`
+  - VAPID_PUBLIC_KEY = `<Your setup wizard VAPID_PUBLIC_KEY>`
+  - DB_HOST = `mastodongcp-social-pgbouncer.us-central1-a.c.mastodon-tutorial.internal` (Use this format but replace the VM name, project name, and region as appropriate)
+  - DB_PORT = `6432`
+  - DB_NAME = `mastodon`
+  - DB_USER = `mastodon`
+  - DB_PASS = `<Your password for the mastodon user within the mastodon-db SQL instance>`
+  - REDIS_HOST = `<Your mastodongcp-social-redis Redis instance Primary Endpoint>`
+  - REDIS_PORT = `6379`
+  - REDIS_PASSWORD = `<LEAVE THIS EMPTY>`
+  - S3_ENABLED = `true`
+  - S3_PROTOCOL = `https`
+  - S3_HOSTNAME = `storage.googleapis.com`
+  - S3_ENDPOINT = `https://storage.googleapis.com`
+  - S3_MULTIPART_THRESHOLD = `52428800`
+  - S3_BUCKET = `mastodongcp-social-storage`
+  - S3_REGION = `us-central1`
+  - AWS_ACCESS_KEY_ID = `<Your generated Google Cloud Storage HMAC Access Key from earlier>`
+  - AWS_SECRET_ACCESS_KEY = `<Your generated Google Cloud Storage HMAC Secret from earlier>`
+  - SMTP_SERVER = `smtp.mailgun.org`
+  - SMTP_PORT = `2525`
+  - SMTP_LOGIN = `<Your Mailgun SMTP username from before, like of the email format @mastodongcp.social>`
+  - SMTP_PASSWORD = `<Your Mailgun SMTP password>`
+  - SMTP_AUTH_METHOD = `plain`
+  - SMTP_OPENSSL_VERIFY_MODE = `none`
+  - SMTP_ENABLE_STARTTLS = `auto`
+  - SMTP_FROM_ADDRESS = `Mastodon <notifications@mastodongcp.social>`
+  - RAILS_LOG_LEVEL = `warn`
+  - PREPARED_STATEMENTS = `false`
+  - ES_ENABLED = `true`
+  - ES_HOST = `mastodongcp-social-es.us-central1-a.c.mastodon-tutorial.internal` (Use this format but replace the VM name, project name, and region as appropriate)
+  - ES_PORT = `9200`
+  - DB_POOL = `20`
+  - MALLOC_ARENA_MAX = `2`
+  - LD_PRELOAD = `libjemalloc.so.2`
+
+- **Boot Disk:** Click "CHANGE", then set the Operating system to `Container Optimized OS` and the Version to the latest LTS release of `Container-Optimized OS`. Once done click the blue "SELECT" button.
+- **Identity and API access:** For Access scopes select "Allow default access". Keep all the other settings as is.
+- **Advanced options:**
+
+- Management:
+
+- Under Metadata click on the "ADD ITEM" button.
+- Set the key to `google-logging-enabled` and set the Value 1 to `true`.
+
+#### _sidekiq scheduler_
+
+- **Name:** `mastodongcp-social-sidekiq-scheduler-spot`
+- **Location:** Select "Regional" and then set the Region to `us-central1`.
+- **Machine configuration:** Select E2 and `e2-micro (2 vCPU, 1 core, 1 GB memory)`
+- **Availability policies:** Select "Spot" for the VM provisioning model.
+- **Container:** Click the "DEPLOY CONTAINER" button, when the modal pops up:
+- Set the Container image to `docker.io/tootsuite/mastodon:v4.2.3`.
+- Set Restart policy to "Never".
+- Select "Run as privileged".
+
+- Arguments
+
+  - Argument 1 = `bundle`
+  - Argument 2 = `exec`
+  - Argument 3 = `sidekiq`
+  - Argument 4 = `-c`
+  - Argument 5 = `2`
+  - Argument 6 = `-q`
+  - Argument 7 = `mailers`
+  - Argument 8 = `-q`
+  - Argument 9 = `scheduler`
+
+- Environment variables
+
+  - LOCAL_DOMAIN = `mastodongcp.social`
+  - SINGLE_USER_MODE = `false`
+  - SECRET_KEY_BASE = `<Your setup wizard SECRET_KEY_BASE>`
+  - OTP_SECRET = `<Your setup wizard OTP_SECRET>`
+  - VAPID_PRIVATE_KEY = `<Your setup wizard VAPID_PRIVATE_KEY>`
+  - VAPID_PUBLIC_KEY = `<Your setup wizard VAPID_PUBLIC_KEY>`
+  - DB_HOST = `mastodongcp-social-pgbouncer.us-central1-a.c.mastodon-tutorial.internal` (Use this format but replace the VM name, project name, and region as appropriate)
+  - DB_PORT = `6432`
+  - DB_NAME = `mastodon`
+  - DB_USER = `mastodon`
+  - DB_PASS = `<Your password for the mastodon user within the mastodon-db SQL instance>`
+  - REDIS_HOST = `<Your mastodongcp-social-redis Redis instance Primary Endpoint>`
+  - REDIS_PORT = `6379`
+  - REDIS_PASSWORD = `<LEAVE THIS EMPTY>`
+  - S3_ENABLED = `true`
+  - S3_PROTOCOL = `https`
+  - S3_HOSTNAME = `storage.googleapis.com`
+  - S3_ENDPOINT = `https://storage.googleapis.com`
+  - S3_MULTIPART_THRESHOLD = `52428800`
+  - S3_BUCKET = `mastodongcp-social-storage`
+  - S3_REGION = `us-central1`
+  - AWS_ACCESS_KEY_ID = `<Your generated Google Cloud Storage HMAC Access Key from earlier>`
+  - AWS_SECRET_ACCESS_KEY = `<Your generated Google Cloud Storage HMAC Secret from earlier>`
+  - SMTP_SERVER = `smtp.mailgun.org`
+  - SMTP_PORT = `2525`
+  - SMTP_LOGIN = `<Your Mailgun SMTP username from before, like of the email format @mastodongcp.social>`
+  - SMTP_PASSWORD = `<Your Mailgun SMTP password>`
+  - SMTP_AUTH_METHOD = `plain`
+  - SMTP_OPENSSL_VERIFY_MODE = `none`
+  - SMTP_ENABLE_STARTTLS = `auto`
+  - SMTP_FROM_ADDRESS = `Mastodon <notifications@mastodongcp.social>`
+  - RAILS_LOG_LEVEL = `warn`
+  - PREPARED_STATEMENTS = `false`
+  - ES_ENABLED = `true`
+  - ES_HOST = `mastodongcp-social-es.us-central1-a.c.mastodon-tutorial.internal` (Use this format but replace the VM name, project name, and region as appropriate)
+  - ES_PORT = `9200`
+  - DB_POOL = `2`
+  - MALLOC_ARENA_MAX = `2`
+  - LD_PRELOAD = `libjemalloc.so.2`
+
+- **Boot Disk:** Click "CHANGE", then set the Operating system to `Container Optimized OS` and the Version to the latest LTS release of `Container-Optimized OS`. Once done click the blue "SELECT" button.
+- **Identity and API access:** For Access scopes select "Allow default access". Keep all the other settings as is.
+- **Advanced options:**
+
+- Management:
+
+- Under Metadata click on the "ADD ITEM" button.
+- Set the key to `google-logging-enabled` and set the Value 1 to `true`.
+
 ### Creating the Instance Groups
+
+Creating the respective instance groups for each of these new instance templates is also fairly straightforward following the workflow that we used for Nginx, but below are some of the changes to take note of. Enter the following details in the "Create Instance Group" page, then hit the blue "CREATE" button:
+
+#### _web_
+
+```
+Name: mastodongcp-social-web-mig
+Instance template: mastodongcp-social-web-spot
+Location: Multiple zones
+Region: us-central1
+Zones: us-central1-c, us-central1-a, us-central1-f, us-central1-b
+Maximum number of instances: 3
+Health check -> CREATE A HEALTH CHECK
+    Health Check
+    Name: mastodongcp-social-web-health-check
+    Scope: Regional
+    Region: us-central1
+    Protocol: TCP
+    Port: 3000
+    Hit SAVE
+```
+
+#### _streaming_
+
+```
+Name: mastodongcp-social-streaming-mig
+Instance template: mastodongcp-social-streaming-spot
+Location: Multiple zones
+Region: us-central1
+Zones: us-central1-c, us-central1-a, us-central1-f, us-central1-b
+Maximum number of instances: 3
+Health check -> CREATE A HEALTH CHECK
+    Health Check
+    Name: mastodongcp-social-streaming-health-check
+    Scope: Regional
+    Region: us-central1
+    Protocol: TCP
+    Port: 4000
+    Hit SAVE
+```
+
+#### _sidekiq_
+
+```
+Name: mastodongcp-social-sidekiq-mig
+Instance template: mastodongcp-social-sidekiq-spot
+Location: Multiple zones
+Region: us-central1
+Zones: us-central1-c, us-central1-a, us-central1-f, us-central1-b
+Maximum number of instances: 3
+Health check -> CREATE A HEALTH CHECK
+    Health Check
+    Name: mastodongcp-social-sidekiq-health-check
+    Scope: Regional
+    Region: us-central1
+    Protocol: TCP
+    Port: 22
+    Hit SAVE
+```
+
+#### _sidekiq scheduler_
+
+```
+Name: mastodongcp-social-sidekiq-mig
+Instance template: mastodongcp-social-sidekiq-spot
+Location: Multiple zones
+Region: us-central1
+Zones: us-central1-c, us-central1-a, us-central1-f, us-central1-b
+Maximum number of instances: 3
+Health check: mastodongcp-social-sidekiq-health-check
+```
 
 ## Load Balancer
 
 ### Creating New Load Balancers
 
+One of the last things we will need to do is to create load balancers that will allow the static IP addresses we made from before point to the ehpemeral spot VMs that are periodically created and destroyed by the instance groups. Lets start with creating the external IP load balancer for Nginx:
+
+1. Navigate to Load Balancing:
+
+- In the Cloud Console search bar, type in "Load balancing" and click on the first suggested result.
+- Once on the "Load balancing" page, click on the blue text that reads "CREATE LOAD BALANCER" near the top of the page.
+- Click on the the blue text that reads "START CONFIGURATION" near the bottom of the card labeled "Network Load Balancer (TCP/SSL)"
+- On this new page before hitting the blue "CONTINUE" button, select "Single region only" under the "Multiple regions or single region" section of the page.
+- On the "Create external passthrough Network Load Balancer" page, set Load Balancer name to `mastodongcp-social-nginx-load-balancer` and the Region to `us-central1`.
+
+2. Backend configuration:
+
+- Within the "New backend" card, set the Instance group to `mastodongcp-social-nginx-mig`
+- Set the Health check to be `mastodongcp-social-nginx-health-check`
+- Set the Session affinity to `Client IP`.
+
+3. Frontend configuration:
+
+- Within the "New Frontend IP and port" card, set the Name to `mastodongcp-social-nginx-load-balancer-forwarding-rule`, the IP address to `mastodon-nginx`, and then select "Multiple" under Ports and type in `80,443`.
+- Hit "DONE".
+
+4. Review and Create:
+
+- Review your load balancer configuration.
+- Click the blue "CREATE" button to create the load balancer.
+
+Now that we have established our public static IP address for our Nginx load balancer, we need to do a similar thing for our private static IP addresses to facilitate communication between our web and streaming VMs. When you are at the "Create a load balancer" page in the process of creating a load balancer for an internap IP address, select "Only between my VMs" from under the Internet facing or internal only section this time. Keep using "Single region only" as well though. This process is almost identical to the previous one, but with these changes for the load balancers of web and streaming respectively:
+
+```
+WEB LOAD BALANCER
+
+Load Balancer name: mastodongcp-social-web-load-balancer
+Region: us-central1
+Network: default
+
+Backend configuration:
+Instance group: mastodongcp-social-web-mig
+Health check: mastodongcp-social-web-health-check
+Session affinity: None
+
+Frontend configuration:
+Name: mastodongcp-social-web-load-balancer-forwarding-rule
+Subnetwork: default
+IP address: Ephemeral (Custom)
+Custom empemeral IP address: 10.128.15.200
+Ports: Single
+Port number: 3000
+```
+
+```
+STREAMING LOAD BALANCER
+
+Load Balancer name: mastodongcp-social-streaming-load-balancer
+Region: us-central1
+Network: default
+
+Backend configuration:
+Instance group: mastodongcp-social-streaming-mig
+Health check: mastodongcp-social-streaming-health-check
+Session affinity: None
+
+Frontend configuration:
+Name: mastodongcp-social-streaming-load-balancer-forwarding-rule
+Subnetwork: default
+IP address: Ephemeral (Custom)
+Custom empemeral IP address: 10.128.15.201
+Ports: Single
+Port number: 4000
+```
+
+After you do this you should have the three load balancers fully functional, and our work here is done.
+
 ## Final Remarks
+
+If you have followed all of the instructions corroectly you should be able to access your Mastodon instance by going to the domain name from your browser. Congrats!
