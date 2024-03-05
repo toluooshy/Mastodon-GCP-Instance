@@ -374,7 +374,7 @@ Creating our VM involves several steps. Below is how we will get this done:
      - **Machine configuration:** Select T2D and `t2d-standard-1 (1 vCPU, 4 GB memory)`
      - **Availability policies:** Select "Standard" for the VM provisioning model.
      - **Container:** Click the "DEPLOY CONTAINER" button, when the modal pops up:
-       - Set the Container image to `docker.io/tootsuite/mastodon:v4.2.3`.
+       - Set the Container image to `docker.io/tootsuite/mastodon:v4.2.8`.
        - Set Restart policy to "Never".
        - Select "Run as privileged".
      - **Boot Disk:** Click "CHANGE", then set the Operating system to `Container Optimized OS` and the Version to the latest LTS release of `Container-Optimized OS`. Once done click the blue "SELECT" button.
@@ -391,7 +391,7 @@ To run the new VM we can SSH into it from the GCP Cloud Compute Console. From th
 
 Once you've been SSH'd in run the following commands in the following order to start the Mastodon setup wizard.
 
-1. `docker run -it tootsuite/mastodon:v4.2.3 /bin/bash`
+1. `docker run -it tootsuite/mastodon:v4.2.8 /bin/bash`
 2. `cd /opt/mastodon`
 3. `RAILS_ENV=production bundle exec rake mastodon:setup`
 
@@ -502,14 +502,22 @@ Below is how we will create our Elasticsearch VM:
      - **Container:** Click the "DEPLOY CONTAINER" button, when the modal pops up:
        - Set the Container image to `docker.io/bitnami/elasticsearch:latest`.
        - Set Restart policy to "Never".
-       - Select "Run as privileged".
+       - Keep "Run as privileged" unselected.
        - Environment variables
          - ELASTICSEARCH_CLUSTER_NAME: `mastodongcp-social`
          - ELASTICSEARCH_HEAP_SIZE: `768m`
      - **Boot Disk:** Click "CHANGE", then set the Operating system to `Container Optimized OS` and the Version to the latest LTS release of `Container-Optimized OS`. Once done click the blue "SELECT" button.
      - **Identity and API access:** For Access scopes select "Allow default access". Keep all the other settings as is.
      - **Advanced options:**
+    
+       - Disks:
 
+         - Click on the "ADD NEW DISK" button.
+         - Apply the following configurations wonce the Add new disk modal opens:
+           - Name: `mastodongcp-social-es-persistence`
+           - Size: `10`
+           - Keep everything else the same
+        
        - Management:
 
          - Under Metadata click on the "ADD ITEM" button.
@@ -529,7 +537,7 @@ Below is how we will create our Elasticsearch VM:
 3. **Create the Instance:**
    - Click the blue "CREATE" button to create the staging VM. This process may take a few minutes.
 
-Now that we have our machine, it should automatically run based on the provisioned Elasticsearch container and the preset environment variables.
+Now that we have our machine, it should automatically run based on the provisioned Elasticsearch container and the preset environment variables. We do need to do one more thing though, we need to let the vm know that we want it to use the additional 10GB disk we just created. To do this SSH into the es vm and run `sudo mkfs.ext4 -m 0 -E lazy_itable_init=0,lazy_journal_init=0,discard /dev/sdb` to make the vm mount the additional disk we created.
 
 ### Certbot VM
 
@@ -882,7 +890,7 @@ An Instance Group is a managed and scalable set of VM instances that are created
          Hit SAVE
      ```
 
-## Setting up the Web, Streaming, Sidekiq, and Sidekiq Scheduler VMs
+## Setting up the Web, Streaming, Sidekiq, Sidekiq Scheduler, and Management VMs
 
 Now that we're familiar with the workflow of creating instance groups to automate the generation of VMs using instance templates, we will do a similar thing for our web, streaming, sidekiq, and sidekiq scheduler VMs.
 
@@ -897,7 +905,7 @@ This process is almost identical what we dis for our Nginx VM, but there will be
 - **Machine configuration:** Select T2D and `t2d-standard-1 (1 vCPU, 4 GB memory)`
 - **Availability policies:** Select "Spot" for the VM provisioning model.
 - **Container:** Click the "DEPLOY CONTAINER" button, when the modal pops up:
-- Set the Container image to `docker.io/tootsuite/mastodon:v4.2.3`.
+- Set the Container image to `docker.io/tootsuite/mastodon:v4.2.8`.
 - Set Restart policy to "Never".
 - Select "Run as privileged".
 
@@ -968,7 +976,7 @@ This process is almost identical what we dis for our Nginx VM, but there will be
 - **Machine configuration:** Select E2 and `e2-micro (2 vCPU, 1 core, 1 GB memory)`
 - **Availability policies:** Select "Spot" for the VM provisioning model.
 - **Container:** Click the "DEPLOY CONTAINER" button, when the modal pops up:
-- Set the Container image to `docker.io/tootsuite/mastodon:v4.2.3`.
+- Set the Container image to `docker.io/tootsuite/mastodon:v4.2.8`.
 - Set Restart policy to "Never".
 - Select "Run as privileged".
 
@@ -1034,7 +1042,7 @@ This process is almost identical what we dis for our Nginx VM, but there will be
 - **Machine configuration:** Select T2D and `t2d-standard-1 (1 vCPU, 4 GB memory)`
 - **Availability policies:** Select "Spot" for the VM provisioning model.
 - **Container:** Click the "DEPLOY CONTAINER" button, when the modal pops up:
-- Set the Container image to `docker.io/tootsuite/mastodon:v4.2.3`.
+- Set the Container image to `docker.io/tootsuite/mastodon:v4.2.8`.
 - Set Restart policy to "Never".
 - Select "Run as privileged".
 
@@ -1112,7 +1120,7 @@ This process is almost identical what we dis for our Nginx VM, but there will be
 - **Machine configuration:** Select E2 and `e2-micro (2 vCPU, 1 core, 1 GB memory)`
 - **Availability policies:** Select "Spot" for the VM provisioning model.
 - **Container:** Click the "DEPLOY CONTAINER" button, when the modal pops up:
-- Set the Container image to `docker.io/tootsuite/mastodon:v4.2.3`.
+- Set the Container image to `docker.io/tootsuite/mastodon:v4.2.8`.
 - Set Restart policy to "Never".
 - Select "Run as privileged".
 
@@ -1178,6 +1186,76 @@ This process is almost identical what we dis for our Nginx VM, but there will be
 
 - Under Metadata click on the "ADD ITEM" button.
 - Set the key to `google-logging-enabled` and set the Value 1 to `true`.
+
+#### _management_
+
+- **Name:** `mastodongcp-social-management`
+- **Location:** Select "Regional" and then set the Region to `us-central1`.
+- **Machine configuration:** Select T2D and `t2d-standard-1 (1 vCPU, 4 GB memory)`
+- **Availability policies:** Select "Standard" for the VM provisioning model.
+- **Container:** Click the "DEPLOY CONTAINER" button, when the modal pops up:
+- Set the Container image to `docker.io/tootsuite/mastodon:v4.2.8`.
+- Set Restart policy to "Never".
+- Select "Run as privileged".
+
+- Arguments
+
+  - Argument 1 = `tall`
+  - Argument 2 = `-f`
+  - Argument 3 = `/dev/null`
+
+- Environment variables
+
+  - LOCAL_DOMAIN = `mastodongcp.social`
+  - SINGLE_USER_MODE = `false`
+  - SECRET_KEY_BASE = `<Your setup wizard SECRET_KEY_BASE>`
+  - OTP_SECRET = `<Your setup wizard OTP_SECRET>`
+  - VAPID_PRIVATE_KEY = `<Your setup wizard VAPID_PRIVATE_KEY>`
+  - VAPID_PUBLIC_KEY = `<Your setup wizard VAPID_PUBLIC_KEY>`
+  - DB_HOST = `mastodongcp-social-pgbouncer.us-central1-a.c.mastodon-tutorial.internal` (Use this format but replace the VM name, project name, and region as appropriate)
+  - DB_PORT = `6432`
+  - DB_NAME = `mastodon`
+  - DB_USER = `mastodon`
+  - DB_PASS = `<Your password for the mastodon user within the mastodon-db SQL instance>`
+  - REDIS_HOST = `<Your mastodongcp-social-redis Redis instance Primary Endpoint>`
+  - REDIS_PORT = `6379`
+  - REDIS_PASSWORD = `<LEAVE THIS EMPTY>`
+  - S3_ENABLED = `true`
+  - S3_PROTOCOL = `https`
+  - S3_HOSTNAME = `storage.googleapis.com`
+  - S3_ENDPOINT = `https://storage.googleapis.com`
+  - S3_MULTIPART_THRESHOLD = `52428800`
+  - S3_BUCKET = `mastodongcp-social-storage`
+  - S3_REGION = `us-central1`
+  - AWS_ACCESS_KEY_ID = `<Your generated Google Cloud Storage HMAC Access Key from earlier>`
+  - AWS_SECRET_ACCESS_KEY = `<Your generated Google Cloud Storage HMAC Secret from earlier>`
+  - SMTP_SERVER = `smtp.mailgun.org`
+  - SMTP_PORT = `2525`
+  - SMTP_LOGIN = `<Your Mailgun SMTP username from before, like of the email format @mastodongcp.social>`
+  - SMTP_PASSWORD = `<Your Mailgun SMTP password>`
+  - SMTP_AUTH_METHOD = `plain`
+  - SMTP_OPENSSL_VERIFY_MODE = `none`
+  - SMTP_ENABLE_STARTTLS = `auto`
+  - SMTP_FROM_ADDRESS = `Mastodon <notifications@mastodongcp.social>`
+  - RAILS_LOG_LEVEL = `warn`
+  - PREPARED_STATEMENTS = `false`
+  - ES_ENABLED = `true`
+  - ES_HOST = `mastodongcp-social-es.us-central1-a.c.mastodon-tutorial.internal` (Use this format but replace the VM name, project name, and region as appropriate)
+  - ES_PORT = `9200`
+  - DB_POOL = `25`
+  - MALLOC_ARENA_MAX = `2`
+  - LD_PRELOAD = `libjemalloc.so.2`
+
+- **Boot Disk:** Click "CHANGE", then set the Operating system to `Container Optimized OS` and the Version to the latest LTS release of `Container-Optimized OS`. Once done click the blue "SELECT" button.
+- **Identity and API access:** For Access scopes select "Allow default access". Keep all the other settings as is.
+- **Advanced options:**
+
+- Management:
+
+- Under Metadata click on the "ADD ITEM" button.
+- Set the key to `google-logging-enabled` and set the Value 1 to `true`.
+
+For this template once it's created you can directly create a vm for it. Once the vm has been created you need to then SSH into it and run `docker ps`, this tells us all of the processes running on this docker container. Copy the name of the process that is currently running (it should be formatted something like `klt-mastodongcp-management-es-abcd`); this is the process that is effectively our shell within this container. Run `docker exec -it <PASTED PROCESS NAME> /bin/bash` to access this shell, and then once inside run `RAILS_ENV=production bin/tootctl search deploy` to initiate the elasticsearch connection. This will enable you to use the search functionality in your actual mastodon instance. Now we're done with this specific case for the management vm.
 
 ### Creating the Instance Groups
 
